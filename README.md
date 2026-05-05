@@ -381,6 +381,8 @@ ai-chat-web/
 ├── index.html          # 前端单页面应用（HTML + CSS + JS）
 ├── ai.py               # Flask 后端代理服务
 ├── requirements.txt    # Python 依赖列表
+├── LICENSE             # MIT 开源许可证
+├── CHANGELOG.md        # 版本更新记录
 ├── .gitignore          # Git 忽略规则
 └── README.md           # 项目说明文档
 ```
