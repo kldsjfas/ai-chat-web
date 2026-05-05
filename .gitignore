@@ -1,7 +1,4 @@
 __pycache__/
 *.pyc
 .env
-*.json
-*.md
-!README.md
 *.log
