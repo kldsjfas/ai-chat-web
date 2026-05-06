@@ -1,18 +1,18 @@
-# Changelog
+# 更新日志
 
 ## [1.0.0] - 2025-05-05
 
-### Added
-- Multi-model support with 8 preset providers (DeepSeek, Qwen, SiliconFlow, GLM, Kimi, Baichuan, Yi, MiniMax)
-- Streaming output with real-time Markdown rendering
-- Multi-turn conversation memory with configurable context length
-- Light/dark theme with 4 accent color presets + custom color picker
-- Compact and wide-screen dual layout
-- Conversation management with tags (create, switch, delete, clear all)
-- Import/export conversations as Markdown and profiles as JSON
-- Image upload support for multimodal models
-- Regenerate AI responses
-- Model list discovery via API
-- Connection testing utility
-- SSRF protection, rate limiting, optional AUTH_KEY authentication
-- Docker deployment support
+### 新增
+- 多模型支持，内置 8 家服务商预设（DeepSeek、通义千问、硅基流动、GLM、Kimi、百川、零一万物、MiniMax）
+- 实时流式输出，AI 回复逐字显示并支持 Markdown 渲染
+- 多轮上下文记忆，可自定义携带历史消息条数
+- 亮色 / 深色主题，4 种预设主题色 + 自定义取色器
+- 紧凑模式（手机）和宽屏模式（桌面）双布局
+- 多对话管理，支持标签分类（创建、切换、删除、清空）
+- 对话导出为 Markdown，模型配置导出 / 导入为 JSON
+- 支持图片上传给多模态模型
+- 一键重新生成 AI 回复
+- 自动获取模型列表
+- 连接测试工具
+- 安全防护：内网访问拦截、IP 频率限制、可选 AUTH_KEY 认证
+- Docker 部署支持
