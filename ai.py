@@ -104,6 +104,8 @@ def validate_payload(data, max_messages=50):
             role = m.get('role', '')
             if role not in ('user', 'assistant', 'system', 'ai'):
                 return f"不支持的消息角色: {role}", 400
+            if not isinstance(m.get('content', ''), str):
+                return "消息内容必须是字符串", 400
     prompt = data.get('prompt', '')
     if prompt and len(prompt) > 100000:
         return "prompt 不能超过 100000 字符", 400
@@ -114,14 +116,57 @@ def validate_payload(data, max_messages=50):
     if images is not None:
         if not isinstance(images, list) or len(images) > 10:
             return "images 必须是数组且不超过 10 张", 400
+        for img in images:
+            if not isinstance(img, str) or not img.startswith('data:image/'):
+                return "图片必须是 data:image 格式", 400
+    temp = data.get('temperature')
+    if temp is not None and not (isinstance(temp, (int, float)) and 0 <= temp <= 2):
+        return "temperature 必须在 0-2 之间", 400
+    max_tokens = data.get('max_tokens')
+    if max_tokens is not None and not (isinstance(max_tokens, int) and 1 <= max_tokens <= 65536):
+        return "max_tokens 必须在 1-65536 之间", 400
     return None, None
+
+
+def build_api_messages(data):
+    """把前端传来的 prompt / messages / images 组装成 OpenAI 格式的消息列表"""
+    api_messages = []
+    system_prompt = data.get('system_prompt', '')
+    if system_prompt:
+        api_messages.append({"role": "system", "content": system_prompt})
+    for m in data.get('messages') or []:
+        role = m["role"]
+        if role == 'ai':
+            role = 'assistant'
+        api_messages.append({"role": role, "content": m["content"]})
+    prompt = data.get('prompt', '')
+    images = data.get('images') or []
+    if images:
+        content = [{"type": "image_url", "image_url": {"url": img}} for img in images]
+        if prompt:
+            content.insert(0, {"type": "text", "text": prompt})
+        api_messages.append({"role": "user", "content": content})
+    elif prompt:
+        api_messages.append({"role": "user", "content": prompt})
+    return api_messages
+
+
+def build_upstream_payload(data, stream=False):
+    payload = {"model": data.get('model'), "messages": build_api_messages(data)}
+    if data.get('temperature') is not None:
+        payload["temperature"] = data['temperature']
+    if data.get('max_tokens') is not None:
+        payload["max_tokens"] = data['max_tokens']
+    if stream:
+        payload["stream"] = True
+    return payload
 
 
 @app.route('/')
 def index():
     resp = send_from_directory(os.path.dirname(__file__), 'index.html')
     resp.headers['Content-Security-Policy'] = (
-        "default-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "default-src 'self' 'unsafe-inline'; "
         "connect-src 'self'; "
         "img-src 'self' data: blob: https:; "
         "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
@@ -148,40 +193,26 @@ def ask_ai():
     api_key = data.get('api_key')
     api_url = data.get('api_url')
     model_name = data.get('model')
-    prompt = data.get('prompt')
-    system_prompt = data.get('system_prompt', '')
-    messages = data.get('messages', None)
 
     if not all([api_key, api_url, model_name]):
         return jsonify({"error": "配置参数不完整"}), 400
-    if not prompt and not messages:
+    if not data.get('prompt') and not data.get('messages') and not data.get('images'):
         return jsonify({"error": "没有输入内容"}), 400
 
-    api_messages = []
-    if system_prompt:
-        api_messages.append({"role": "system", "content": system_prompt})
-    if messages and len(messages) > 0:
-        for m in messages:
-            role = m["role"]
-            if role == 'ai':
-                role = 'assistant'
-            api_messages.append({"role": role, "content": m["content"]})
-        if prompt:
-            api_messages.append({"role": "user", "content": prompt})
-    else:
-        api_messages.append({"role": "user", "content": prompt})
-
-    logger.info(f"ask_ai ip={ip} model={model_name} len={len(prompt or '')}")
+    logger.info(f"ask_ai ip={ip} model={model_name} len={len(data.get('prompt') or '')}")
     try:
-        payload = {"model": model_name, "messages": api_messages}
         response = safe_post(api_url, headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
-        }, json_data=payload)
+        }, json_data=build_upstream_payload(data))
         response.raise_for_status()
         result = response.json()
         logger.info(f"ask_ai_success model={model_name} status={response.status_code}")
-        return jsonify({"reply": result['choices'][0]['message']['content']})
+        message = result['choices'][0]['message']
+        reply = {"reply": message.get('content') or ''}
+        if message.get('reasoning_content'):
+            reply["reasoning"] = message['reasoning_content']
+        return jsonify(reply)
     except ValueError as e:
         return jsonify({"error": str(e)}), 403
     except Exception as e:
@@ -206,26 +237,11 @@ def ask_ai_stream():
     api_key = data.get('api_key')
     api_url = data.get('api_url')
     model_name = data.get('model')
-    prompt = data.get('prompt')
-    system_prompt = data.get('system_prompt', '')
-    messages = data.get('messages', None)
 
     if not all([api_key, api_url, model_name]):
         return jsonify({"error": "配置参数不完整"}), 400
-
-    api_messages = []
-    if system_prompt:
-        api_messages.append({"role": "system", "content": system_prompt})
-    if messages and len(messages) > 0:
-        for m in messages:
-            role = m["role"]
-            if role == 'ai':
-                role = 'assistant'
-            api_messages.append({"role": role, "content": m["content"]})
-        if prompt:
-            api_messages.append({"role": "user", "content": prompt})
-    else:
-        api_messages.append({"role": "user", "content": prompt})
+    if not data.get('prompt') and not data.get('messages') and not data.get('images'):
+        return jsonify({"error": "没有输入内容"}), 400
 
     logger.info(f"ask_ai_stream ip={ip} model={model_name}")
 
@@ -238,8 +254,13 @@ def ask_ai_stream():
             resp = safe_post(api_url, headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
-            }, json_data={"model": model_name, "messages": api_messages, "stream": True},
+            }, json_data=build_upstream_payload(data, stream=True),
                 stream=True, timeout=120)
+            if resp.status_code != 200:
+                detail = resp.text[:200]
+                logger.warning(f"stream_upstream_error status={resp.status_code} detail={detail}")
+                yield f"data: {json.dumps({'error': f'接口返回 HTTP {resp.status_code}: {detail}'})}\n\n"
+                return
             accumulated = ""
             for line in resp.iter_lines(decode_unicode=True):
                 if not line or not line.startswith("data: "):
@@ -250,7 +271,11 @@ def ask_ai_stream():
                     break
                 try:
                     chunk = json.loads(chunk_str)
-                    content = chunk['choices'][0].get('delta', {}).get('content', '')
+                    delta = chunk['choices'][0].get('delta', {})
+                    reasoning = delta.get('reasoning_content', '')
+                    if reasoning:
+                        yield f"data: {json.dumps({'reasoning': reasoning})}\n\n"
+                    content = delta.get('content', '')
                     if content:
                         accumulated += content
                         yield f"data: {json.dumps({'content': content})}\n\n"

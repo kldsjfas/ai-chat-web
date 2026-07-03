@@ -535,14 +535,34 @@
         .bubble pre {
             background: var(--pre-bg);
             color: var(--pre-fg);
-            padding: 12px;
             border-radius: 8px;
-            overflow-x: auto;
+            overflow: hidden;
             font-size: 13px;
             margin: 6px 0;
             line-height: 1.5;
         }
-        .bubble pre code { background: none; padding: 0; font-size: inherit; }
+        .bubble pre .code-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px 12px;
+            font-size: 11px;
+            font-family: inherit;
+            color: #8b949e;
+            border-bottom: 1px solid rgba(255,255,255,.08);
+            user-select: none;
+        }
+        .bubble pre .code-copy {
+            background: none;
+            border: none;
+            color: #8b949e;
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            padding: 0;
+        }
+        .bubble pre .code-copy:hover { color: #fff; }
+        .bubble pre code { display: block; background: none; padding: 12px; font-size: inherit; overflow-x: auto; }
         .bubble img { max-width: 100%; border-radius: 8px; margin: 6px 0; cursor: pointer; }
         .bubble a { color: var(--accent); text-decoration: underline; }
         .msg.user .bubble a { color: #fff; }
@@ -557,6 +577,24 @@
         .bubble table { border-collapse: collapse; margin: 4px 0; font-size: 13px; }
         .bubble th, .bubble td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
         .bubble th { background: var(--msg-bg); }
+
+        /* 推理模型的思考过程 */
+        .bubble .think {
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: var(--sub);
+        }
+        .bubble .think summary {
+            cursor: pointer;
+            user-select: none;
+            font-weight: 500;
+        }
+        .bubble .think .think-body {
+            margin-top: 6px;
+            padding-left: 10px;
+            border-left: 2px solid var(--border);
+            line-height: 1.7;
+        }
 
         .msg .copy-btn,
         .msg .retry-btn {
@@ -636,6 +674,8 @@
         .btn-send:disabled { opacity: .5; transform: none; cursor: not-allowed; }
         .btn-attach { background: var(--input-bg); color: var(--sub); }
         .btn-attach:hover { background: var(--border); }
+        .btn-stop { background: var(--danger); color: #fff; }
+        .btn-stop:hover { opacity: .85; }
 
         .image-preview {
             display: flex;
@@ -1125,6 +1165,7 @@
             <button class="btn btn-attach" onclick="document.getElementById('fileInput').click()">📎</button>
             <textarea id="prompt" rows="1" placeholder="输入消息... (Enter 发送)"></textarea>
             <button class="btn btn-send" id="sendBtn" onclick="send()">➤</button>
+            <button class="btn btn-stop" id="stopBtn" onclick="stopGeneration()" title="停止生成" style="display:none;">⏹</button>
         </div>
     </div>
 
@@ -1408,11 +1449,12 @@
                     return '<img src="' + img + '" style="max-width:200px;border-radius:8px;margin:4px 0;" loading="lazy">';
                 }).join('');
             }
+            var think = (m.role === 'ai' && m.reasoning) ? thinkHtml(m.reasoning) : '';
             var isLastAi = m.role === 'ai' && i === chat.messages.length - 1 && !state.isProcessing;
             return '<div class="msg ' + cls + '">' +
                 '<div class="avatar">' + avatar + '</div>' +
                 '<div class="body">' +
-                    '<div class="bubble">' + bubbleContent + imgs + '</div>' +
+                    '<div class="bubble">' + think + bubbleContent + imgs + '</div>' +
                     '<div class="time">' + fmtTime(m.time) + '</div>' +
                     '<div class="msg-actions">' +
                         (m.role === 'ai' ? '<button class="copy-btn" onclick="copyMsg(' + i + ')">📋</button>' : '') +
@@ -1490,6 +1532,10 @@
             h += '<label>模型名称</label><div style="display:flex;gap:6px;"><input id="' + target + 'Model" placeholder="如: deepseek-v4-flash" style="flex:1;">';
             h += '<button class="btn-outline" onclick="fetchModelList(\'' + target + '\')" id="' + target + 'FetchModelsBtn" style="width:auto;padding:8px 14px;flex-shrink:0;white-space:nowrap;">📋 获取列表</button></div>';
             h += '<div id="' + target + 'ModelListArea" style="margin-top:6px;"><select id="' + target + 'ModelList" onchange="document.getElementById(\'' + target + 'Model\').value=this.value" style="display:none;width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;outline:none;font-family:inherit;background:var(--input-bg);color:var(--text);"></select></div>';
+            h += '<div style="display:flex;gap:8px;">';
+            h += '<div style="flex:1;"><label>温度 (0-2)</label><input id="' + target + 'Temp" type="number" min="0" max="2" step="0.1" placeholder="留空用默认"></div>';
+            h += '<div style="flex:1;"><label>最大回复 tokens</label><input id="' + target + 'MaxTokens" type="number" min="1" max="65536" placeholder="留空用默认"></div>';
+            h += '</div>';
         } else if (tab === 'persona') {
             if (!editing) {
                 h += '<div style="color:var(--sub);font-size:13px;text-align:center;padding:30px 0;">请先在 🔌 模型 页签中添加配置，<br>然后在列表中点 ✏ 编辑。</div>';
@@ -1564,6 +1610,8 @@
         sv('AiName', p.aiName);
         sv('AiAvatar', p.aiAvatar);
         sv('AiAvatarImage', p.aiAvatarImage || '');
+        sv('Temp', p.temperature || '');
+        sv('MaxTokens', p.maxTokens || '');
         highlightPickedAvatar(target, p.aiAvatar);
         var preview = document.getElementById(target + 'AvatarPreview');
         if (preview) {
@@ -1620,13 +1668,13 @@
     }
     function switchSettingsTab(tab, target) {
         state.settingsTab = tab;
-        renderModalSettings();
+        rerenderSettings();
     }
     function setAccent(n) {
         state.accentColor = n;
         applyAccent();
         saveState();
-        renderModalSettings();
+        rerenderSettings();
     }
 
     // ---------- 对话操作 ----------
@@ -1707,8 +1755,7 @@
     }
     function cancelEdit() {
         state.editingProfileId = null;
-        renderModalSettings();
-        renderWideSettings();
+        rerenderSettings();
     }
 
     function saveProfile(target) {
@@ -1717,6 +1764,7 @@
 
         var name = null, apiKey = null, apiUrl = null, model = null, systemPrompt = null;
         var aiName = null, aiAvatar = null, aiAvatarImage = null, editId = null;
+        var temperature = null, maxTokens = null;
 
         if (fe('Name')) name = f('Name');
         if (fe('Key')) apiKey = f('Key');
@@ -1727,6 +1775,8 @@
         if (fe('AiAvatar')) aiAvatar = f('AiAvatar');
         if (fe('AiAvatarImage')) aiAvatarImage = f('AiAvatarImage');
         if (fe('EditId')) editId = f('EditId');
+        if (fe('Temp')) temperature = f('Temp');
+        if (fe('MaxTokens')) maxTokens = f('MaxTokens');
 
         if (editId) {
             var p = state.profiles.find(function(x) { return x.id === editId; });
@@ -1739,6 +1789,8 @@
             if (aiName === null) aiName = p.aiName;
             if (aiAvatar === null) aiAvatar = p.aiAvatar;
             if (aiAvatarImage === null) aiAvatarImage = p.aiAvatarImage;
+            if (temperature === null) temperature = p.temperature;
+            if (maxTokens === null) maxTokens = p.maxTokens;
         }
 
         if (!name || !apiKey || !apiUrl || !model) { showToast('请填写完整模型信息'); return; }
@@ -1747,6 +1799,8 @@
         if (aiName !== null) data.aiName = aiName;
         if (aiAvatar !== null) data.aiAvatar = aiAvatar;
         if (aiAvatarImage !== null) data.aiAvatarImage = aiAvatarImage;
+        if (temperature !== null) data.temperature = temperature;
+        if (maxTokens !== null) data.maxTokens = maxTokens;
         if (!data.aiName) data.aiName = name;
         if (!data.aiAvatar) data.aiAvatar = '🤖';
 
@@ -1762,7 +1816,7 @@
         }
 
         saveState();
-        renderModalSettings();
+        rerenderSettings();
         renderAll();
         showToast(editId ? '配置已更新 ✓' : '配置已保存 ✓');
     }
@@ -1794,7 +1848,7 @@
         state.conversations.forEach(function(c) { if (c.profileId === id) c.profileId = state.profiles.length ? state.profiles[0].id : null; });
         saveState();
         renderAll();
-        renderModalSettings();
+        rerenderSettings();
     }
 
     function exportProfile(id) {
@@ -1854,7 +1908,7 @@
                 });
                 saveState();
                 renderAll();
-                renderModalSettings();
+                rerenderSettings();
                 showToast('已导入 ' + count + ' 个配置 ✓');
             } catch(e) {
                 showToast('JSON 格式错误，导入失败');
@@ -1917,12 +1971,15 @@
     function removeImage(i) { state.pendingImages.splice(i, 1); renderImagePreview(); }
 
     // ---------- 上下文记忆 ----------
+    // 注意：调用时最新一条用户消息已被 push 进 messages，它会作为 prompt 单独发送，
+    // 这里要排除掉它，否则同一句话会发两遍
     function buildContext() {
         var chat = getActiveChat();
         if (!chat || !state.contextCount) return null;
         var msgs = [];
-        var start = Math.max(0, chat.messages.length - state.contextCount * 2);
-        for (var i = start; i < chat.messages.length; i++) {
+        var end = chat.messages.length - 1;
+        var start = Math.max(0, end - state.contextCount * 2);
+        for (var i = start; i < end; i++) {
             var m = chat.messages[i];
             if (m.role === 'user' || m.role === 'ai') msgs.push({ role: m.role === 'ai' ? 'assistant' : m.role, content: m.content });
         }
@@ -1961,11 +2018,7 @@
         }
     }
 
-    function sendNormal(chat, profile, content, images) {
-        addTyping();
-        state.isProcessing = true;
-        document.getElementById('sendBtn').style.display = 'none';
-        var ctx = buildContext();
+    function buildAskBody(profile, content, images) {
         var body = {
             api_key: profile.apiKey,
             api_url: profile.apiUrl,
@@ -1973,22 +2026,48 @@
             prompt: content,
             system_prompt: profile.systemPrompt || ''
         };
+        var temp = parseFloat(profile.temperature);
+        if (!isNaN(temp)) body.temperature = temp;
+        var maxTok = parseInt(profile.maxTokens);
+        if (!isNaN(maxTok)) body.max_tokens = maxTok;
         if (images.length) body.images = images;
+        var ctx = buildContext();
         if (ctx && ctx.length) body.messages = ctx;
+        return body;
+    }
+
+    function setProcessing(on) {
+        state.isProcessing = on;
+        document.getElementById('sendBtn').style.display = on ? 'none' : '';
+        document.getElementById('stopBtn').style.display = on ? '' : 'none';
+    }
+
+    function stopGeneration() {
+        if (state.abortController) state.abortController.abort();
+    }
+
+    function sendNormal(chat, profile, content, images) {
+        addTyping();
+        setProcessing(true);
+        var ac = new AbortController();
+        state.abortController = ac;
         fetch(apiUrl('/ask_ai'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(buildRequestBody(body))
+            body: JSON.stringify(buildRequestBody(buildAskBody(profile, content, images))),
+            signal: ac.signal
         }).then(function(r) { return r.json(); })
         .then(function(d) {
-            removeTyping();
-            chat.messages.push({ role: 'ai', content: d.reply || ('❌ ' + (d.error || '错误')), time: Date.now() });
-        }).catch(function() {
-            removeTyping();
-            chat.messages.push({ role: 'ai', content: '⚠ 网络失败，检查后端 (5030)', time: Date.now() });
+            var msg = { role: 'ai', content: d.error ? '❌ ' + d.error : (d.reply || '(空回复)'), time: Date.now() };
+            if (d.reasoning) msg.reasoning = d.reasoning;
+            chat.messages.push(msg);
+        }).catch(function(e) {
+            var text = e.name === 'AbortError' ? '(已停止生成)' : '⚠ 网络失败，检查后端 (5030)';
+            chat.messages.push({ role: 'ai', content: text, time: Date.now() });
         }).finally(function() {
-            state.isProcessing = false;
-            document.getElementById('sendBtn').style.display = '';
+            removeTyping();
+            state.abortController = null;
+            setProcessing(false);
             saveState();
             renderAll();
             document.getElementById('prompt').focus();
@@ -2007,20 +2086,21 @@
         msgContainer.appendChild(row);
         scrollBottom();
 
-        state.isProcessing = true;
-        document.getElementById('sendBtn').style.display = 'none';
+        setProcessing(true);
         var full = '';
+        var thinking = '';
+        var lastPaint = 0;
 
-        var ctx = buildContext();
-        var body = {
-            api_key: profile.apiKey,
-            api_url: profile.apiUrl,
-            model: profile.model,
-            prompt: content,
-            system_prompt: profile.systemPrompt || ''
-        };
-        if (images.length) body.images = images;
-        if (ctx && ctx.length) body.messages = ctx;
+        // 节流重绘；代码高亮留到结束后统一做，长回复不至于越写越卡
+        function paint() {
+            var now = Date.now();
+            if (now - lastPaint < 80) return;
+            lastPaint = now;
+            var bubble = document.getElementById('streamBubble');
+            if (!bubble) return;
+            bubble.innerHTML = (thinking ? thinkHtml(thinking, true) : '') + mdToHtml(full);
+            scrollBottomIfNear();
+        }
 
         var ac = new AbortController();
         state.abortController = ac;
@@ -2028,7 +2108,7 @@
         fetch(apiUrl('/ask_ai_stream'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(buildRequestBody(body)),
+            body: JSON.stringify(buildRequestBody(buildAskBody(profile, content, images))),
             signal: ac.signal
         }).then(function(resp) {
             if (!resp.ok) {
@@ -2049,41 +2129,39 @@
                     buf += decoder.decode(result.value, { stream: true });
                     var lines = buf.split('\n');
                     buf = lines.pop();
+                    var finished = false;
                     lines.forEach(function(line) {
-                        if (!line.startsWith('data: ')) return;
+                        if (finished || !line.startsWith('data: ')) return;
                         try {
                             var d = JSON.parse(line.slice(6));
-                            if (d.content) {
-                                full += d.content;
-                                var bubble = document.getElementById('streamBubble');
-                                if (bubble) {
-                                    bubble.innerHTML = mdToHtml(full);
-                                    scrollBottom();
-                                    requestAnimationFrame(function() {
-                                        bubble.querySelectorAll('pre code').forEach(function(el) { if (window.hljs) hljs.highlightElement(el); });
-                                    });
-                                }
-                            }
-                            if (d.done) { full = d.full || full; cleanup(full); return; }
-                            if (d.error) { full = '❌ ' + d.error; cleanup(full); return; }
+                            if (d.reasoning) thinking += d.reasoning;
+                            if (d.content) full += d.content;
+                            if (d.done) { full = d.full || full; finished = true; cleanup(full); return; }
+                            if (d.error) { full = '❌ ' + d.error; finished = true; cleanup(full); return; }
                         } catch(e) {}
                     });
+                    if (finished) return;
+                    paint();
                     pump();
+                }).catch(function(e) {
+                    // 中途停止时保留已生成的部分
+                    cleanup(full || (e.name === 'AbortError' ? '(已停止生成)' : '⚠ ' + e.message));
                 });
             }
             pump();
         }).catch(function(e) {
             if (e.name !== 'AbortError') cleanup('⚠ ' + e.message);
-            else cleanup('⚠ 请求中断');
+            else cleanup(full || '(已停止生成)');
         });
 
         function cleanup(result) {
             var srow = document.getElementById('streamRow');
             if (srow) srow.remove();
             state.abortController = null;
-            chat.messages.push({ role: 'ai', content: result || '空回复', time: Date.now() });
-            state.isProcessing = false;
-            document.getElementById('sendBtn').style.display = '';
+            var msg = { role: 'ai', content: result || '空回复', time: Date.now() };
+            if (thinking) msg.reasoning = thinking;
+            chat.messages.push(msg);
+            setProcessing(false);
             saveState();
             renderAll();
             document.getElementById('prompt').focus();
@@ -2181,6 +2259,11 @@
             document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
         });
     }
+    // 流式输出时只有用户本来就在底部附近才跟随滚动，往上翻看时不打扰
+    function scrollBottomIfNear() {
+        var el = document.getElementById('chatMessages');
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) el.scrollTop = el.scrollHeight;
+    }
     function fmtTime(ts) {
         var d = new Date(ts);
         var now = new Date();
@@ -2189,38 +2272,121 @@
         return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
     }
     function escapeHtml(t) {
-        var x = document.createElement('div');
-        x.textContent = t;
-        return x.innerHTML;
+        return String(t == null ? '' : t).replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function thinkHtml(text, open) {
+        return '<details class="think"' + (open ? ' open' : '') + '><summary>💭 思考过程</summary>' +
+            '<div class="think-body">' + escapeHtml(text).replace(/\n/g, '<br>') + '</div></details>';
+    }
+
+    // 只放行 http(s) / mailto，图片额外放行 data:image，避免 javascript: 之类的链接
+    function safeUrl(u, allowData) {
+        u = (u || '').trim().replace(/"/g, '%22');
+        if (/^https?:\/\//i.test(u) || /^mailto:/i.test(u)) return u;
+        if (allowData && /^data:image\//i.test(u)) return u;
+        return '#';
+    }
+
+    // 行内元素：图片、链接、粗体、斜体、删除线（输入已 HTML 转义）
+    function mdInline(h) {
+        h = h.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function(_, a, u) { return '<img src="' + safeUrl(u, true) + '" alt="' + a + '" loading="lazy">'; });
+        h = h.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function(_, t, u) { return '<a href="' + safeUrl(u) + '" target="_blank" rel="noopener">' + t + '</a>'; });
+        h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        h = h.replace(/\*(\S(?:[^*]*\S)?)\*/g, '<em>$1</em>');
+        h = h.replace(/~~(.+?)~~/g, '<del>$1</del>');
+        return h;
     }
 
     function mdToHtml(md) {
         if (!md) return '';
         var h = escapeHtml(md);
-        h = h.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function(_, a, u) { return '<img src="' + u + '" alt="' + a + '" loading="lazy">'; });
-        h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-        h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
-        h = h.replace(/`{3}(\w*)\n?([\s\S]*?)`{3}/g, function(_, l, c) { return '<pre><code>' + c.trim() + '</code></pre>'; });
-        h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
-        h = h.replace(/^### (.+)$/gm, '<h4>$1</h4>');
-        h = h.replace(/^## (.+)$/gm, '<h3>$1</h3>');
-        h = h.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-        h = h.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
-        h = h.replace(/^- (.+)$/gm, '<li>$1</li>');
-        h = h.replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>');
-        h = h.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
-        h = h.replace(/^---$/gm, '<hr>');
-        h = h.replace(/\n{2,}/g, '</p><p>');
-        h = h.replace(/\n/g, '<br>');
-        h = '<p>' + h + '</p>';
-        h = h.replace(/<p>\s*<ul>/g, '<ul>').replace(/<\/ul>\s*<\/p>/g, '</ul>');
-        h = h.replace(/<p>\s*<blockquote>/g, '<blockquote>').replace(/<\/blockquote>\s*<\/p>/g, '</blockquote>');
-        h = h.replace(/<p>\s*<pre>/g, '<pre>').replace(/<\/pre>\s*<\/p>/g, '</pre>');
-        h = h.replace(/<p>\s*<h([2-4])>/g, '<h$1>').replace(/<\/h([2-4])>\s*<\/p>/g, '</h$1>');
-        h = h.replace(/<p>\s*<hr>\s*<\/p>/g, '<hr>');
-        h = h.replace(/<p><\/p>/g, '').replace(/<p>(\s*<br>\s*)*<\/p>/g, '');
-        return h;
+        var stash = [];
+        function stashPut(html) {
+            stash.push(html);
+            return '\u0000' + (stash.length - 1) + '\u0000';
+        }
+        // 先把代码块摘出来存好，防止内部内容被当作 Markdown 解析；
+        // 未闭合的围栏也按代码块处理，这样流式输出时代码能边收边显示
+        h = h.replace(/`{3}([\w+#.-]*)[^\S\n]*\n?([\s\S]*?)(?:`{3}|$)/g, function(_, lang, code) {
+            var cls = lang ? ' class="language-' + lang + '"' : '';
+            return stashPut('<pre><div class="code-head"><span>' + (lang || 'code') + '</span>' +
+                '<button class="code-copy" type="button">复制</button></div>' +
+                '<code' + cls + '>' + code.replace(/\n$/, '') + '</code></pre>');
+        });
+        h = h.replace(/`([^`\n]+)`/g, function(_, c) { return stashPut('<code>' + c + '</code>'); });
+
+        var lines = h.split('\n');
+        var out = [];
+        var para = [];
+        var listType = null;
+        function flushPara() {
+            if (para.length) { out.push('<p>' + para.map(mdInline).join('<br>') + '</p>'); para = []; }
+        }
+        function closeList() {
+            if (listType) { out.push('</' + listType + '>'); listType = null; }
+        }
+        function tableCells(row) {
+            return row.replace(/^\||\|$/g, '').split('|').map(function(c) { return c.trim(); });
+        }
+
+        for (var i = 0; i < lines.length; i++) {
+            var t = lines[i].trim();
+            var m;
+            if (!t) { flushPara(); closeList(); continue; }
+            if (/^\u0000\d+\u0000$/.test(t)) { flushPara(); closeList(); out.push(t); continue; }
+            if ((m = t.match(/^(#{1,4})\s+(.+)$/))) {
+                flushPara(); closeList();
+                var lv = m[1].length + 1;
+                out.push('<h' + lv + '>' + mdInline(m[2]) + '</h' + lv + '>');
+                continue;
+            }
+            if (/^(-{3,}|\*{3,})$/.test(t)) { flushPara(); closeList(); out.push('<hr>'); continue; }
+            if (/^&gt;/.test(t)) {
+                flushPara(); closeList();
+                var quote = [];
+                while (i < lines.length && /^&gt;/.test(lines[i].trim())) {
+                    quote.push(lines[i].trim().replace(/^&gt;\s?/, ''));
+                    i++;
+                }
+                i--;
+                out.push('<blockquote>' + quote.map(mdInline).join('<br>') + '</blockquote>');
+                continue;
+            }
+            // 表格：表头行 + 至少含一个 - 的分隔行
+            if (t.indexOf('|') !== -1 && i + 1 < lines.length &&
+                /^\|?[\s:|-]+$/.test(lines[i + 1].trim()) && lines[i + 1].indexOf('-') !== -1 && lines[i + 1].indexOf('|') !== -1) {
+                flushPara(); closeList();
+                var tbl = '<table><thead><tr>' + tableCells(t).map(function(c) { return '<th>' + mdInline(c) + '</th>'; }).join('') + '</tr></thead><tbody>';
+                i++;
+                while (i + 1 < lines.length && lines[i + 1].indexOf('|') !== -1 && lines[i + 1].trim()) {
+                    i++;
+                    tbl += '<tr>' + tableCells(lines[i].trim()).map(function(c) { return '<td>' + mdInline(c) + '</td>'; }).join('') + '</tr>';
+                }
+                out.push(tbl + '</tbody></table>');
+                continue;
+            }
+            if ((m = t.match(/^[-*]\s+(.+)$/))) {
+                flushPara();
+                if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
+                out.push('<li>' + mdInline(m[1]) + '</li>');
+                continue;
+            }
+            if ((m = t.match(/^\d+[.)]\s+(.+)$/))) {
+                flushPara();
+                if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
+                out.push('<li>' + mdInline(m[1]) + '</li>');
+                continue;
+            }
+            closeList();
+            para.push(t);
+        }
+        flushPara();
+        closeList();
+
+        return out.join('').replace(/\u0000(\d+)\u0000/g, function(_, n) { return stash[+n]; });
     }
 
     // ---------- UI 控制 ----------
@@ -2234,10 +2400,19 @@
         document.getElementById('drawerOverlay').classList.remove('on');
     }
     function openSettings() {
+        // 宽屏模式用右侧面板，紧凑模式用弹窗
+        if (state.wideLayout) { openWideSettings(); return; }
         renderModalSettings();
         document.getElementById('settingsOverlay').classList.add('on');
     }
-    function closeSettings() { document.getElementById('settingsOverlay').classList.remove('on'); }
+    function closeSettings() {
+        document.getElementById('settingsOverlay').classList.remove('on');
+        closeWideSettings();
+    }
+    function rerenderSettings() {
+        if (document.getElementById('settingsOverlay').classList.contains('on')) renderModalSettings();
+        if (state.wideSettingsOpen) renderWideSettings();
+    }
 
     // ---------- 全局快捷键 ----------
     document.addEventListener('keydown', function(e) {
@@ -2246,6 +2421,10 @@
             var overlay = document.getElementById('settingsOverlay');
             if (overlay && overlay.classList.contains('on')) {
                 closeSettings();
+                return;
+            }
+            if (state.wideSettingsOpen) {
+                closeWideSettings();
                 return;
             }
             var drawer = document.getElementById('drawer');
@@ -2270,6 +2449,19 @@
         clearTimeout(t._tid);
         t._tid = setTimeout(function() { t.classList.remove('show'); }, 2000);
     }
+
+    // 代码块复制按钮（事件委托，重渲染后依然有效）
+    document.getElementById('chatMessages').addEventListener('click', function(e) {
+        var btn = e.target.closest('.code-copy');
+        if (!btn) return;
+        var pre = btn.closest('pre');
+        var code = pre && pre.querySelector('code');
+        if (!code) return;
+        navigator.clipboard.writeText(code.innerText).then(function() {
+            btn.textContent = '已复制 ✓';
+            setTimeout(function() { btn.textContent = '复制'; }, 1500);
+        }).catch(function() { showToast('复制失败'); });
+    });
 
     // ---------- 输入事件 ----------
     document.getElementById('prompt').addEventListener('keydown', function(e) {
